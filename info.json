@@ -1,0 +1,30 @@
+{
+  "project_name": "Vanilla_SDL_Calculator",
+  "language": "C++",
+  "standard": "C++11",
+  "build_system": "Requires External Linker Configuration",
+  "dependencies": [
+    {
+      "name": "SDL2",
+      "description": "Simple DirectMedia Layer for windowing, graphics, and input.",
+      "type": "Runtime/Development Library",
+      "required_files": ["SDL.h", "libSDL2.a or SDL2.lib"],
+      "linker_flags": "-lSDL2"
+    },
+    {
+      "name": "SDL2_ttf",
+      "description": "TrueType Font library extension for rendering text.",
+      "type": "Development Library",
+      "required_files": ["SDL_ttf.h", "libSDL2_ttf.a or SDL2_ttf.lib"],
+      "linker_flags": "-lSDL2_ttf"
+    },
+    {
+      "name": "C++ Standard Library",
+      "description": "Required for std::string, std::vector, iostream, etc.",
+      "type": "Standard Library",
+      "required_files": ["<string>", "<vector>", "<cmath>"],
+      "linker_flags": ""
+    }
+  ],
+  "build_notes": "Ensure font file (e.g., 'arial.ttf') is accessible in the execution directory for SDL_ttf initialization."
+}
