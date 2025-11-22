@@ -1,129 +1,338 @@
 #include <SDL2/SDL.h>
-#include <SDL2/SDL_ttf.h>
+#include <SDL2/SDL_ttf.h> // Required for rendering text
 #include <string>
+#include <sstream>
 #include <vector>
+#include <cmath>
+#include <cstdio>
+#include <iostream>
+#include <iomanip>
 
+// --- Configuration Constants ---
+const int WINDOW_WIDTH = 400;
+const int WINDOW_HEIGHT = 550; // Increased height for better layout
+const int BUTTON_WIDTH = 90;
+const int BUTTON_HEIGHT = 70;
+const int PADDING = 8;
+
+// --- Colors (R, G, B, A) ---
+const SDL_Color COLOR_BG = {10, 10, 10, 255};      // Dark Window Background
+const SDL_Color COLOR_BUTTON = {30, 30, 30, 255};  // Button Background
+const SDL_Color COLOR_HOVER = {50, 50, 50, 255};   // Button Hover
+const SDL_Color COLOR_TEXT = {255, 255, 255, 255}; // White Text
+const SDL_Color COLOR_DISPLAY_BG = {20, 20, 20, 255}; // Display Background
+
+// --- Global State ---
+SDL_Window* g_window = nullptr;
+SDL_Renderer* g_renderer = nullptr;
+TTF_Font* g_font = nullptr;
+
+std::string input_str = "0";
+double storedValue = 0.0;
+char currentOp = 0;
+bool resetInput = true; // Start ready for input
+
+// --- Button Structure ---
 struct Button {
     SDL_Rect rect;
     std::string label;
+    std::string type; // "number", "operator", "clear", "equals"
+    char value;
+
+    bool is_hovered(int mouse_x, int mouse_y) const {
+        return mouse_x >= rect.x && mouse_x <= rect.x + rect.w &&
+               mouse_y >= rect.y && mouse_y <= rect.y + rect.h;
+    }
 };
 
-SDL_Color white = {255, 255, 255};
-SDL_Color gray  = {40, 40, 40};
-SDL_Color dark  = {20, 20, 20};
+std::vector<Button> buttons;
 
-void drawText(SDL_Renderer* r, TTF_Font* f, std::string text, int x, int y) {
-    SDL_Surface* surf = TTF_RenderText_Blended(f, text.c_str(), white);
-    SDL_Texture* tex = SDL_CreateTextureFromSurface(r, surf);
+// --- Forward Declarations ---
+bool init_sdl();
+void cleanup();
+void render_text(const std::string& text, int x, int y, SDL_Color color);
+void layout_buttons();
+void handle_button_press(const Button& btn);
+std::string format_double(double val);
+void calculate_result();
 
-    SDL_Rect dst{ x, y, surf->w, surf->h };
-    SDL_RenderCopy(r, tex, nullptr, &dst);
+// --- Calculator Logic ---
 
-    SDL_FreeSurface(surf);
-    SDL_DestroyTexture(tex);
+std::string format_double(double val) {
+    // Custom formatting to resemble '%g' (no trailing zeros for integers)
+    std::stringstream ss;
+    ss << std::setprecision(10); // Set high precision
+    if (std::abs(val - std::round(val)) < 1e-9) {
+        ss << std::fixed << std::setprecision(0) << val;
+    } else {
+        ss << val;
+    }
+    return ss.str();
 }
 
-bool inRect(int mx, int my, SDL_Rect rect) {
-    return mx >= rect.x && mx <= rect.x + rect.w &&
-           my >= rect.y && my <= rect.y + rect.h;
+void calculate_result() {
+    if (currentOp == 0) return;
+
+    double a = storedValue;
+    double b = 0.0;
+    try {
+        b = std::stod(input_str);
+    } catch (...) {
+        b = 0.0;
+    }
+
+    double result = 0;
+    bool error = false;
+
+    switch (currentOp) {
+    case '+': result = a + b; break;
+    case '-': result = a - b; break;
+    case '*': result = a * b; break;
+    case '/':
+        if (b != 0) {
+            result = a / b;
+        } else {
+            input_str = "Error";
+            error = true;
+        }
+        break;
+    }
+
+    if (!error) {
+        input_str = format_double(result);
+        storedValue = result;
+    } else {
+        storedValue = 0.0;
+    }
+    currentOp = 0;
+    resetInput = true;
 }
 
-int main() {
-    SDL_Init(SDL_INIT_VIDEO);
-    TTF_Init();
+void handle_button_press(const Button& btn) {
+    if (btn.type == "number") {
+        if (resetInput) {
+            input_str = (btn.value == '.') ? "0." : btn.label;
+            resetInput = false;
+        } else {
+            if (btn.value == '.' && input_str.find('.') != std::string::npos) {
+                // Ignore multiple decimals
+                return;
+            }
+            if (input_str == "0" && btn.value != '.') {
+                input_str = btn.label; // Replace initial zero
+            } else {
+                input_str += btn.label;
+            }
+        }
+    } else if (btn.type == "operator") {
+        if (!resetInput) { // If there's a pending calculation, run it first
+            if (currentOp != 0) {
+                calculate_result();
+                storedValue = std::stod(input_str);
+            } else {
+                 try { storedValue = std::stod(input_str); } catch (...) { storedValue = 0.0; }
+            }
+        }
+        currentOp = btn.value;
+        resetInput = true;
+    } else if (btn.type == "clear") {
+        input_str = "0";
+        storedValue = 0.0;
+        currentOp = 0;
+        resetInput = true;
+    } else if (btn.type == "equals") {
+        calculate_result();
+    }
+}
 
-    SDL_Window* window = SDL_CreateWindow("GUI Calculator",
-                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                          300, 450, SDL_WINDOW_SHOWN);
+// --- SDL Graphics and Setup ---
 
-    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, 0);
-    TTF_Font* font = TTF_OpenFont("arial.ttf", 28);
+// Renders text using the loaded font
+void render_text(const std::string& text, int x, int y, SDL_Color color) {
+    if (text.empty() || !g_renderer || !g_font) return;
 
-    // Layout buttons
-    std::vector<Button> buttons = {
-        {{20, 120, 60, 60}, "7"}, {{110, 120, 60, 60}, "8"}, {{200, 120, 60, 60}, "9"},
-        {{20, 200, 60, 60}, "4"}, {{110, 200, 60, 60}, "5"}, {{200, 200, 60, 60}, "6"},
-        {{20, 280, 60, 60}, "1"}, {{110, 280, 60, 60}, "2"}, {{200, 280, 60, 60}, "3"},
-        {{20, 360, 60, 60}, "C"}, {{110, 360, 60, 60}, "0"}, {{200, 360, 60, 60}, "="},
+    // Create a surface from the text
+    SDL_Surface* surface = TTF_RenderText_Solid(g_font, text.c_str(), color);
+    if (!surface) {
+        fprintf(stderr, "TTF_RenderText_Solid error: %s\n", TTF_GetError());
+        return;
+    }
 
-        {{260, 120, 30, 60}, "+"},
-        {{260, 200, 30, 60}, "-"},
-        {{260, 280, 30, 60}, "*"},
-        {{260, 360, 30, 60}, "/"}
+    // Create a texture from the surface
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(g_renderer, surface);
+    if (!texture) {
+        fprintf(stderr, "SDL_CreateTextureFromSurface error: %s\n", SDL_GetError());
+    }
+
+    // Determine position and size
+    SDL_Rect dstrect = {x, y, surface->w, surface->h};
+
+    // Render and clean up
+    if (texture) {
+        SDL_RenderCopy(g_renderer, texture, NULL, &dstrect);
+        SDL_DestroyTexture(texture);
+    }
+    SDL_FreeSurface(surface);
+}
+
+void layout_buttons() {
+    // Array of button labels
+    const std::vector<std::pair<std::string, std::string>> labels = {
+        {"7", "number"}, {"8", "number"}, {"9", "number"}, {"/", "operator"},
+        {"4", "number"}, {"5", "number"}, {"6", "number"}, {"*", "operator"},
+        {"1", "number"}, {"2", "number"}, {"3", "number"}, {"-", "operator"},
+        {".", "number"}, {"0", "number"}, {"C", "clear"},   {"+", "operator"},
+        {"=", "equals"}
     };
 
-    std::string display = "";
-    double a = 0, b = 0;
-    char op = 0;
+    int current_x = PADDING;
+    int current_y = 100 + PADDING; // Start below display area
 
-    bool running = true;
+    for (size_t i = 0; i < labels.size(); ++i) {
+        Button btn;
+        btn.label = labels[i].first;
+        btn.type = labels[i].second;
+        btn.value = btn.label[0]; // Store char value
+
+        if (btn.type == "equals") {
+            btn.rect = {current_x, current_y, WINDOW_WIDTH - (2 * PADDING), BUTTON_HEIGHT};
+        } else {
+            btn.rect = {current_x, current_y, BUTTON_WIDTH, BUTTON_HEIGHT};
+        }
+
+        buttons.push_back(btn);
+
+        // Move cursor for next button
+        if (btn.type != "equals") {
+            current_x += BUTTON_WIDTH + PADDING;
+            if ((i + 1) % 4 == 0) { // New row after every 4 buttons
+                current_x = PADDING;
+                current_y += BUTTON_HEIGHT + PADDING;
+            }
+        } else {
+            // After the equals button, we are done
+            break;
+        }
+    }
+}
+
+bool init_sdl() {
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
+        return false;
+    }
+
+    if (TTF_Init() == -1) {
+        fprintf(stderr, "TTF_Init failed: %s\n", TTF_GetError());
+        SDL_Quit();
+        return false;
+    }
+
+    g_window = SDL_CreateWindow("Vanilla SDL Calculator",
+                                SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                WINDOW_WIDTH, WINDOW_HEIGHT,
+                                SDL_WINDOW_SHOWN);
+    if (!g_window) {
+        fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
+        cleanup();
+        return false;
+    }
+
+    g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_ACCELERATED);
+    if (!g_renderer) {
+        fprintf(stderr, "SDL_CreateRenderer failed: %s\n", SDL_GetError());
+        cleanup();
+        return false;
+    }
+
+    // Load a font (You need to provide a path to a .ttf file, e.g., Arial.ttf)
+    // Replace "path/to/font.ttf" with a valid font file path on your system
+    g_font = TTF_OpenFont("arial.ttf", 36); 
+    if (!g_font) {
+        fprintf(stderr, "TTF_OpenFont failed: %s. Using default font.\n", TTF_GetError());
+    }
+    
+    // Set up button layout
+    layout_buttons();
+
+    return true;
+}
+
+void cleanup() {
+    if (g_font) TTF_CloseFont(g_font);
+    if (g_renderer) SDL_DestroyRenderer(g_renderer);
+    if (g_window) SDL_DestroyWindow(g_window);
+    TTF_Quit();
+    SDL_Quit();
+}
+
+// --- Main Loop and Rendering ---
+
+int main(int argc, char* argv[]) {
+    if (!init_sdl()) {
+        return 1;
+    }
+
+    bool quit = false;
     SDL_Event event;
 
-    while (running) {
+    while (!quit) {
+        int mouse_x, mouse_y;
+        SDL_GetMouseState(&mouse_x, &mouse_y);
+
         while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT) running = false;
-            if (event.type == SDL_MOUSEBUTTONDOWN) {
-                int mx = event.button.x, my = event.button.y;
-
-                for (auto& btn : buttons) {
-                    if (inRect(mx, my, btn.rect)) {
-                        std::string label = btn.label;
-
-                        if (label == "C") {
-                            display = "";
-                            op = 0;
-                        }
-                        else if (label == "+" || label == "-" || label == "*" || label == "/") {
-                            a = std::stod(display);
-                            op = label[0];
-                            display = "";
-                        }
-                        else if (label == "=") {
-                            b = std::stod(display);
-                            double r = 0;
-
-                            switch (op) {
-                                case '+': r = a + b; break;
-                                case '-': r = a - b; break;
-                                case '*': r = a * b; break;
-                                case '/': r = (b == 0 ? 0 : a / b); break;
-                            }
-                            display = std::to_string(r);
-                        }
-                        else {
-                            display += label;
-                        }
+            if (event.type == SDL_QUIT) {
+                quit = true;
+            }
+            if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
+                for (const auto& btn : buttons) {
+                    if (btn.is_hovered(event.button.x, event.button.y)) {
+                        handle_button_press(btn);
+                        break;
                     }
                 }
             }
         }
 
-        // Draw GUI
-        SDL_SetRenderDrawColor(renderer, dark.r, dark.g, dark.b, 255);
-        SDL_RenderClear(renderer);
+        // --- Drawing ---
+        SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
+        SDL_RenderClear(g_renderer);
 
-        // Display box
-        SDL_Rect displayBox{20, 20, 260, 80};
-        SDL_SetRenderDrawColor(renderer, gray.r, gray.g, gray.b, 255);
-        SDL_RenderFillRect(renderer, &displayBox);
+        // 1. Draw Display Background
+        SDL_Rect display_rect = {PADDING, PADDING, WINDOW_WIDTH - (2 * PADDING), 80};
+        SDL_SetRenderDrawColor(g_renderer, COLOR_DISPLAY_BG.r, COLOR_DISPLAY_BG.g, COLOR_DISPLAY_BG.b, 255);
+        SDL_RenderFillRect(g_renderer, &display_rect);
+        
+        // 2. Render Input Text (right-aligned)
+        int text_width = 0, text_height = 0;
+        // Estimate text size for right alignment (pure SDL requires extra steps, TTF_SizeText helps)
+        TTF_SizeText(g_font, input_str.c_str(), &text_width, &text_height);
+        
+        // Position: X = Display Right Edge - Text Width - PADDING, Y = Display Top + PADDING
+        int text_x = display_rect.x + display_rect.w - text_width - PADDING;
+        int text_y = display_rect.y + (display_rect.h / 2) - (text_height / 2); // Center vertically
+        
+        render_text(input_str, text_x, text_y, COLOR_TEXT);
 
-        drawText(renderer, font, display, 30, 40);
-
-        // Buttons
-        for (auto& btn : buttons) {
-            SDL_SetRenderDrawColor(renderer, gray.r, gray.g, gray.b, 255);
-            SDL_RenderFillRect(renderer, &btn.rect);
-
-            drawText(renderer, font, btn.label,
-                     btn.rect.x + 20, btn.rect.y + 15);
+        // 3. Draw Buttons
+        for (const auto& btn : buttons) {
+            SDL_Color color = btn.is_hovered(mouse_x, mouse_y) ? COLOR_HOVER : COLOR_BUTTON;
+            
+            SDL_SetRenderDrawColor(g_renderer, color.r, color.g, color.b, 255);
+            SDL_RenderFillRect(g_renderer, &btn.rect);
+            
+            // Draw button text (centered)
+            TTF_SizeText(g_font, btn.label.c_str(), &text_width, &text_height);
+            int btn_text_x = btn.rect.x + (btn.rect.w / 2) - (text_width / 2);
+            int btn_text_y = btn.rect.y + (btn.rect.h / 2) - (text_height / 2);
+            render_text(btn.label, btn_text_x, btn_text_y, COLOR_TEXT);
         }
 
-        SDL_RenderPresent(renderer);
+        // Show the drawn frame
+        SDL_RenderPresent(g_renderer);
     }
 
-    TTF_CloseFont(font);
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
+    cleanup();
     return 0;
 }
+
