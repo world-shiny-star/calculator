@@ -1,2 +1,2 @@
 # calculator
-a simple C++ calculator
+a simple C++ calculator GUI 
